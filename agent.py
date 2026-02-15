@@ -173,7 +173,9 @@ def scrape_and_process(url):
         return None
 
 def save_to_sheet(rows):
-    SCOPES = ['[https://www.googleapis.com/auth/spreadsheets](https://www.googleapis.com/auth/spreadsheets)']
+    # CORRECTED LINE BELOW: Removed the markdown brackets []()
+    SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+    
     creds = Credentials.from_service_account_info(
         eval(GOOGLE_CREDS_JSON), scopes=SCOPES
     )
