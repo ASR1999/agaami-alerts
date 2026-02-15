@@ -1,0 +1,6 @@
+requests
+beautifulsoup4
+google-generativeai
+google-auth
+google-api-python-client
+feedparser
