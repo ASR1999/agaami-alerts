@@ -77,7 +77,6 @@ def extract_info_with_ai(text_content, url):
     current_date = datetime.datetime.now().strftime("%Y-%m-%d")
     
     prompt = f"""
-
     ### SYSTEM ROLE
 
     You are an Expert Legal Data Analyst and Research Assistant. Your objective is to extract structured metadata from legal news articles and blog posts with high precision.
@@ -131,7 +130,20 @@ def extract_info_with_ai(text_content, url):
     for attempt in range(max_retries):
         try:
             response = model.generate_content(prompt)
-            return json.loads(response.text) 
+            data = json.loads(response.text)
+            
+            # --- SAFETY CHECK: Handle List vs Dict ---
+            if isinstance(data, list):
+                if len(data) > 0 and isinstance(data[0], dict):
+                    return data[0] # Take first item if it's a list
+                else:
+                    return None # Discard empty lists or lists of strings
+            
+            if not isinstance(data, dict):
+                return None # Discard plain strings
+                
+            return data
+            
         except Exception as e:
             if "429" in str(e):
                 print(f"  !! Rate limit. Waiting 65s... ({attempt+1}/{max_retries})")
