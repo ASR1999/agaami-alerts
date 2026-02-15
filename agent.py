@@ -52,13 +52,22 @@ def get_google_sheets_service():
 def get_existing_urls(service):
     """Reads Column F (Source URL) to check for duplicates."""
     try:
-        # Assumes URLs are in Column F (index 5)
+        # UPDATED: Read from F2 to the end (F2:F) to skip the Header row
         result = service.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID, range="Sheet1!F:F"
+            spreadsheetId=SPREADSHEET_ID, range="Sheet1!F2:F"
         ).execute()
+        
         rows = result.get('values', [])
-        # Flatten list of lists into a single set of URLs
-        return {row[0] for row in rows if row} 
+        
+        # UPDATED: Robust filtering
+        # 1. Checks if row is not empty
+        # 2. Checks if the cell value is not just whitespace
+        existing_set = set()
+        for row in rows:
+            if row and len(row) > 0 and row[0].strip():
+                existing_set.add(row[0].strip())
+                
+        return existing_set
     except Exception as e:
         print(f"Error reading existing URLs: {e}")
         return set()
