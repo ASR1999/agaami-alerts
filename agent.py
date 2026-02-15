@@ -50,31 +50,52 @@ def clean_google_url(google_link):
         return google_link
 
 def extract_info_with_ai(text_content, url):
-    # UPDATED PROMPT: Stricter formatting rules
-    prompt = f"""
-    You are a data extraction bot. Analyze this text from {url}.
+    current_date = datetime.datetime.now().strftime("%Y-%m-%d")
     
-    TEXT START:
-    {text_content[:12000]} 
-    TEXT END
+    # --- IMPROVED PROMPT STRUCTURE ---
+    prompt = f"""
+    ### SYSTEM ROLE
+    You are an Expert Legal Data Analyst and Research Assistant. Your objective is to extract structured metadata from legal news articles and blog posts with high precision.
 
-    TASK:
-    Extract the following.
-    1. Author Name (If not found, assume the Publication/Website Name)
-    2. Author Contact (Email/Twitter? If not found, write "N/A")
-    3. Article Title
-    4. Date (Convert to DD-MM-YYYY format if possible. If 'x hours ago', calculate the date based on today.)
-    5. Summary (Strictly 2 sentences max).
+    ### OUTPUT FORMAT REQUIRMENT
+    You must return strictly a SINGLE line of text separated by pipes (|) in the following order:
+    Author Name|Contact Info|Article Title|Date|Summary
 
-    CRITICAL FORMATTING RULES:
-    - Return ONLY the data joined by pipes (|). 
-    - DO NOT include a header row.
-    - DO NOT use markdown.
-    - DO NOT break lines. Keep it on one single line.
-    - If the text looks like a login screen, cookie error, or robot check, just output: SKIP
+    ### DATA EXTRACTION RULES
+    1. **Author Name**: 
+       - Extract the specific name of the journalist or contributor. 
+       - If no individual author is named, use the Publication/Website Name (e.g., "LiveLaw News Network").
+       - Do not use generic terms like "Staff" or "Admin".
 
-    Example Output:
-    John Doe|john@example.com|New Law Passed|15-02-2026|The new bill was passed today. It affects tax laws.
+    2. **Contact Info**: 
+       - Aggressively search for the author's Email, Twitter/X handle, or LinkedIn URL mentioned in the text.
+       - If the specific author's contact is missing, look for the publication's "Editor" or "Contact Us" email address in the footer/header text.
+       - If absolutely no contact info is found, output: "Not Found".
+
+    3. **Article Title**: 
+       - Extract the exact headline of the article.
+
+    4. **Date**: 
+       - STRICTLY convert all dates to **DD-MM-YYYY** format.
+       - Logic for Relative Dates: 
+         - If text says "2 hours ago" or "Today", use today's date: {current_date}
+         - If text says "Yesterday", calculate the date for yesterday.
+         - If text says "Updated: Feb 14", assume the current year 2026.
+
+    5. **Summary**: 
+       - Write a high-quality, professional summary in exactly 2 sentences.
+       - Focus strictly on the *legal, judicial, or policy* implications of the article.
+       - Do not start with "The article discusses..." or "This text says...". Start directly with the subject (e.g., "The Supreme Court ruled that...").
+
+    ### NEGATIVE CONSTRAINTS (CRITICAL)
+    - **NO HEADER ROW**: Do not output "Author|Contact|Title..." at the start.
+    - **NO MARKDOWN**: Do not use bold (**), italics (*), or code blocks (```).
+    - **NO CONVERSATION**: Do not include "Here is the data" or "I have extracted...". Output ONLY the pipe-separated line.
+    - **JUNK DETECTION**: If the text provided is a Login Page, Subscription Paywall, Robot Check, or Cookie Notice, output ONLY the single word: SKIP
+
+    ### INPUT TEXT START
+    {text_content[:15000]} 
+    ### INPUT TEXT END
     """
     
     max_retries = 3
@@ -91,9 +112,10 @@ def extract_info_with_ai(text_content, url):
     return "Error|Quota Exceeded|Error|Error|Error"
 
 def scrape_and_process(url):
-    # FILTER 1: Skip YouTube/Video links (They break the scraper)
-    if "youtube.com" in url or "youtu.be" in url:
-        print("  -- Skipping YouTube Link")
+    # 1. HARD BLOCKLIST
+    blocked_domains = ["youtube.com", "youtu.be", "pressreader.com", "msn.com"]
+    if any(domain in url for domain in blocked_domains):
+        print(f"  -- Skipping blocked domain: {url}")
         return None
 
     try:
@@ -106,7 +128,7 @@ def scrape_and_process(url):
         soup = BeautifulSoup(response.content, 'html.parser')
         
         # Remove junk elements
-        for script in soup(["script", "style", "nav", "footer", "form"]):
+        for script in soup(["script", "style", "nav", "footer", "form", "iframe", "header"]):
             script.extract()
             
         text = soup.get_text(separator=' ', strip=True)
@@ -114,21 +136,33 @@ def scrape_and_process(url):
         # AI Extraction
         ai_data = extract_info_with_ai(text, url)
         
-        # FILTER 2: Handle "SKIP" command from AI
+        # FILTER: Handle "SKIP" command from AI
         if "SKIP" in ai_data:
             print("  -- AI indicated junk content (Login/Captcha). Skipping.")
             return None
 
-        # Clean up any accidental newlines or headers the AI might still output
+        # Clean up any accidental newlines
         lines = ai_data.split('\n')
-        # Take the last line if multiple are returned (usually the data is last)
         clean_line = lines[-1] 
         
         row_data = clean_line.split('|')
         
+        # Ensure 5 columns
         if len(row_data) < 5:
             row_data += ["Error"] * (5 - len(row_data))
             
+        # 2. PYTHON TRAP: Kill Ghost Headers
+        first_col = row_data[0].strip().lower()
+        if "author name" in first_col or "author" == first_col:
+            print("  -- Caught a ghost header row. Discarding.")
+            return None
+            
+        # 3. PYTHON TRAP: Kill Empty/Junk Rows
+        if "not found" in row_data[0].lower() and "not found" in row_data[2].lower():
+             print("  -- Caught a junk row (Not Found). Discarding.")
+             return None
+
+        # Add Source URL and Time
         row_data.append(url)
         row_data.append(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         
@@ -139,7 +173,7 @@ def scrape_and_process(url):
         return None
 
 def save_to_sheet(rows):
-    SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+    SCOPES = ['[https://www.googleapis.com/auth/spreadsheets](https://www.googleapis.com/auth/spreadsheets)']
     creds = Credentials.from_service_account_info(
         eval(GOOGLE_CREDS_JSON), scopes=SCOPES
     )
@@ -164,7 +198,7 @@ if __name__ == "__main__":
         try:
             feed = feedparser.parse(feed_url)
             
-            # Reduced to Top 2 items per feed
+            # Process Top 2 items
             for entry in feed.entries[:2]:
                 raw_link = entry.link
                 clean_link = clean_google_url(raw_link)
