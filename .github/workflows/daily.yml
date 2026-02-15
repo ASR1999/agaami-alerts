@@ -1,0 +1,31 @@
+name: Agaami Legal Alert Agent
+
+on:
+  schedule:
+    # Runs at 2:00 AM UTC (7:30 AM India time)
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Allows manual button click to test
+
+jobs:
+  run-scraper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20  # Stops if it hangs
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Agent
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
+        run: python agent.py
