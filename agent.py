@@ -14,7 +14,6 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
 
-# Your list of RSS Feeds
 RSS_FEEDS = [
     "https://www.google.co.in/alerts/feeds/15296787733172383910/8375788598715294266",
     "https://www.google.co.in/alerts/feeds/15296787733172383910/509298250493646222",
@@ -37,12 +36,10 @@ RSS_FEEDS = [
     "https://www.google.co.in/alerts/feeds/15296787733172383910/2743587427347208696"
 ]
 
-# Initialize Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-2.0-flash')
 
 def clean_google_url(google_link):
-    """Extracts the real URL from the Google Alert redirect."""
     try:
         parsed = urlparse(google_link)
         query_params = parse_qs(parsed.query)
@@ -53,25 +50,33 @@ def clean_google_url(google_link):
         return google_link
 
 def extract_info_with_ai(text_content, url):
+    # UPDATED PROMPT: Stricter formatting rules
     prompt = f"""
-    You are a legal research assistant. Analyze this text from {url}.
+    You are a data extraction bot. Analyze this text from {url}.
     
-    TEXT:
+    TEXT START:
     {text_content[:12000]} 
+    TEXT END
 
     TASK:
-    Extract these details. If not found, write "Not Found".
-    1. Author Name
-    2. Author Contact (Look for email, Twitter, LinkedIn, or affiliation)
+    Extract the following.
+    1. Author Name (If not found, assume the Publication/Website Name)
+    2. Author Contact (Email/Twitter? If not found, write "N/A")
     3. Article Title
-    4. Date of Publishing
-    5. Summary (Concise, 2-3 sentences)
+    4. Date (Convert to DD-MM-YYYY format if possible. If 'x hours ago', calculate the date based on today.)
+    5. Summary (Strictly 2 sentences max).
 
-    OUTPUT FORMAT (Strictly Pipe Separated):
-    Author Name|Contact Info|Title|Date|Summary
+    CRITICAL FORMATTING RULES:
+    - Return ONLY the data joined by pipes (|). 
+    - DO NOT include a header row.
+    - DO NOT use markdown.
+    - DO NOT break lines. Keep it on one single line.
+    - If the text looks like a login screen, cookie error, or robot check, just output: SKIP
+
+    Example Output:
+    John Doe|john@example.com|New Law Passed|15-02-2026|The new bill was passed today. It affects tax laws.
     """
     
-    # Retry Logic for 429 Errors
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -79,18 +84,20 @@ def extract_info_with_ai(text_content, url):
             return response.text.strip()
         except Exception as e:
             if "429" in str(e):
-                wait_time = 65  # Wait 65 seconds to clear quota
-                print(f"  !! Speed limit hit (429). Cooling down for {wait_time}s... (Attempt {attempt+1}/{max_retries})")
-                time.sleep(wait_time)
+                print(f"  !! Rate limit. Waiting 65s... ({attempt+1}/{max_retries})")
+                time.sleep(65)
             else:
-                print(f"  !! AI Error: {e}")
                 return "Error|Error|Error|Error|Error"
-    
     return "Error|Quota Exceeded|Error|Error|Error"
 
 def scrape_and_process(url):
+    # FILTER 1: Skip YouTube/Video links (They break the scraper)
+    if "youtube.com" in url or "youtu.be" in url:
+        print("  -- Skipping YouTube Link")
+        return None
+
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
         response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code != 200:
@@ -98,8 +105,8 @@ def scrape_and_process(url):
 
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Cleanup
-        for script in soup(["script", "style", "nav", "footer"]):
+        # Remove junk elements
+        for script in soup(["script", "style", "nav", "footer", "form"]):
             script.extract()
             
         text = soup.get_text(separator=' ', strip=True)
@@ -107,18 +114,23 @@ def scrape_and_process(url):
         # AI Extraction
         ai_data = extract_info_with_ai(text, url)
         
-        row_data = ai_data.split('|')
+        # FILTER 2: Handle "SKIP" command from AI
+        if "SKIP" in ai_data:
+            print("  -- AI indicated junk content (Login/Captcha). Skipping.")
+            return None
+
+        # Clean up any accidental newlines or headers the AI might still output
+        lines = ai_data.split('\n')
+        # Take the last line if multiple are returned (usually the data is last)
+        clean_line = lines[-1] 
         
-        # Ensure 5 columns from AI
+        row_data = clean_line.split('|')
+        
         if len(row_data) < 5:
             row_data += ["Error"] * (5 - len(row_data))
             
-        # Add Source URL
         row_data.append(url)
-        
-        # Add Run Timestamp (Current Time)
-        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        row_data.append(current_time)
+        row_data.append(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         
         return row_data
         
@@ -152,7 +164,7 @@ if __name__ == "__main__":
         try:
             feed = feedparser.parse(feed_url)
             
-            # Process top 2 items
+            # Reduced to Top 2 items per feed
             for entry in feed.entries[:2]:
                 raw_link = entry.link
                 clean_link = clean_google_url(raw_link)
@@ -166,7 +178,6 @@ if __name__ == "__main__":
                 
                 if data:
                     all_new_rows.append(data)
-                    # Sleep 15s to be safe
                     time.sleep(15) 
         except Exception as e:
             print(f"Error parsing feed {feed_url}: {e}")
