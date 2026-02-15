@@ -1,8 +1,10 @@
 import os
 import time
+import json
 import datetime
 import requests
 import feedparser
+import re
 from urllib.parse import urlparse, parse_qs
 from bs4 import BeautifulSoup
 import google.generativeai as genai
@@ -37,7 +39,29 @@ RSS_FEEDS = [
 ]
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-2.0-flash')
+model = genai.GenerativeModel('gemini-2.0-flash', generation_config={"response_mime_type": "application/json"})
+
+def get_google_sheets_service():
+    """Authenticates and returns the Sheets service."""
+    SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+    creds = Credentials.from_service_account_info(
+        eval(GOOGLE_CREDS_JSON), scopes=SCOPES
+    )
+    return build('sheets', 'v4', credentials=creds)
+
+def get_existing_urls(service):
+    """Reads Column F (Source URL) to check for duplicates."""
+    try:
+        # Assumes URLs are in Column F (index 5)
+        result = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID, range="Sheet1!F:F"
+        ).execute()
+        rows = result.get('values', [])
+        # Flatten list of lists into a single set of URLs
+        return {row[0] for row in rows if row} 
+    except Exception as e:
+        print(f"Error reading existing URLs: {e}")
+        return set()
 
 def clean_google_url(google_link):
     try:
@@ -52,16 +76,19 @@ def clean_google_url(google_link):
 def extract_info_with_ai(text_content, url):
     current_date = datetime.datetime.now().strftime("%Y-%m-%d")
     
-    # --- IMPROVED PROMPT STRUCTURE ---
     prompt = f"""
+
     ### SYSTEM ROLE
+
     You are an Expert Legal Data Analyst and Research Assistant. Your objective is to extract structured metadata from legal news articles and blog posts with high precision.
 
     ### OUTPUT FORMAT REQUIRMENT
+
     You must return strictly a SINGLE line of text separated by pipes (|) in the following order:
     Author Name|Contact Info|Article Title|Date|Summary
 
     ### DATA EXTRACTION RULES
+
     1. **Author Name**: 
        - Extract the specific name of the journalist or contributor. 
        - If no individual author is named, use the Publication/Website Name (e.g., "LiveLaw News Network").
@@ -94,7 +121,9 @@ def extract_info_with_ai(text_content, url):
     - **JUNK DETECTION**: If the text provided is a Login Page, Subscription Paywall, Robot Check, or Cookie Notice, output ONLY the single word: SKIP
 
     ### INPUT TEXT START
+
     {text_content[:15000]} 
+
     ### INPUT TEXT END
     """
     
@@ -102,24 +131,24 @@ def extract_info_with_ai(text_content, url):
     for attempt in range(max_retries):
         try:
             response = model.generate_content(prompt)
-            return response.text.strip()
+            return json.loads(response.text) 
         except Exception as e:
             if "429" in str(e):
                 print(f"  !! Rate limit. Waiting 65s... ({attempt+1}/{max_retries})")
                 time.sleep(65)
             else:
-                return "Error|Error|Error|Error|Error"
-    return "Error|Quota Exceeded|Error|Error|Error"
+                print(f"  !! JSON/AI Error: {e}")
+                return None
+    return None
 
 def scrape_and_process(url):
-    # 1. HARD BLOCKLIST
     blocked_domains = ["youtube.com", "youtu.be", "pressreader.com", "msn.com"]
     if any(domain in url for domain in blocked_domains):
         print(f"  -- Skipping blocked domain: {url}")
         return None
 
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code != 200:
@@ -127,44 +156,35 @@ def scrape_and_process(url):
 
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Remove junk elements
         for script in soup(["script", "style", "nav", "footer", "form", "iframe", "header"]):
             script.extract()
             
         text = soup.get_text(separator=' ', strip=True)
         
-        # AI Extraction
-        ai_data = extract_info_with_ai(text, url)
+        data = extract_info_with_ai(text, url)
         
-        # FILTER: Handle "SKIP" command from AI
-        if "SKIP" in ai_data:
-            print("  -- AI indicated junk content (Login/Captcha). Skipping.")
+        if not data:
             return None
 
-        # Clean up any accidental newlines
-        lines = ai_data.split('\n')
-        clean_line = lines[-1] 
-        
-        row_data = clean_line.split('|')
-        
-        # Ensure 5 columns
-        if len(row_data) < 5:
-            row_data += ["Error"] * (5 - len(row_data))
-            
-        # 2. PYTHON TRAP: Kill Ghost Headers
-        first_col = row_data[0].strip().lower()
-        if "author name" in first_col or "author" == first_col:
-            print("  -- Caught a ghost header row. Discarding.")
+        if data.get("is_junk", False):
+            print("  -- AI identified junk content. Skipping.")
             return None
-            
-        # 3. PYTHON TRAP: Kill Empty/Junk Rows
-        if "not found" in row_data[0].lower() and "not found" in row_data[2].lower():
-             print("  -- Caught a junk row (Not Found). Discarding.")
+        
+        if data.get("author") == "Not Found" and data.get("title") == "Not Found":
+             print("  -- Empty data returned. Skipping.")
              return None
 
-        # Add Source URL and Time
-        row_data.append(url)
-        row_data.append(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        # Format: Author | Contact | Title | Date | Summary | URL | RunTime
+        row_data = [
+            data.get("author", "N/A"),
+            data.get("contact", "N/A"),
+            data.get("title", "N/A"),
+            data.get("date", "N/A"),
+            data.get("summary", "N/A"),
+            url,
+            # Programmatically adding the current run time here
+            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ]
         
         return row_data
         
@@ -172,15 +192,7 @@ def scrape_and_process(url):
         print(f"Scraping Error {url}: {e}")
         return None
 
-def save_to_sheet(rows):
-    # CORRECTED LINE BELOW: Removed the markdown brackets []()
-    SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-    
-    creds = Credentials.from_service_account_info(
-        eval(GOOGLE_CREDS_JSON), scopes=SCOPES
-    )
-    service = build('sheets', 'v4', credentials=creds)
-    
+def save_to_sheet(service, rows):
     body = {'values': rows}
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
@@ -191,7 +203,13 @@ def save_to_sheet(rows):
 
 if __name__ == "__main__":
     all_new_rows = []
-    processed_urls = set()
+    
+    print("Authenticating with Google Sheets...")
+    sheets_service = get_google_sheets_service()
+    
+    print("Fetching existing URLs to avoid duplicates...")
+    existing_urls = get_existing_urls(sheets_service)
+    print(f"Found {len(existing_urls)} existing articles in the sheet.")
 
     print("Starting Daily Run...")
 
@@ -200,14 +218,17 @@ if __name__ == "__main__":
         try:
             feed = feedparser.parse(feed_url)
             
-            # Process Top 2 items
             for entry in feed.entries[:2]:
                 raw_link = entry.link
                 clean_link = clean_google_url(raw_link)
                 
-                if clean_link in processed_urls:
+                # DUPLICATE CHECK
+                if clean_link in existing_urls:
+                    print(f"  > Skipping Duplicate: {clean_link}")
                     continue
-                processed_urls.add(clean_link)
+                
+                # Add to temporary set so we don't process same link twice in one run
+                existing_urls.add(clean_link) 
 
                 print(f"  > Processing: {clean_link}")
                 data = scrape_and_process(clean_link)
@@ -220,6 +241,6 @@ if __name__ == "__main__":
 
     if all_new_rows:
         print(f"Saving {len(all_new_rows)} rows to sheets...")
-        save_to_sheet(all_new_rows)
+        save_to_sheet(sheets_service, all_new_rows)
     else:
-        print("No data collected.")
+        print("No new data collected.")
