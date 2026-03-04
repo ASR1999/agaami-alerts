@@ -39,7 +39,7 @@ RSS_FEEDS = [
 ]
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-2.0-flash', generation_config={"response_mime_type": "application/json"})
+model = genai.GenerativeModel('gemini-3-flash-preview', generation_config={"response_mime_type": "application/json"})
 
 def get_google_sheets_service():
     """Authenticates and returns the Sheets service."""
