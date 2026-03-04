@@ -7,7 +7,7 @@ import feedparser
 import re
 from urllib.parse import urlparse, parse_qs
 from bs4 import BeautifulSoup
-import google as genai
+from google import genai
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
