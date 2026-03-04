@@ -49,12 +49,39 @@ def get_google_sheets_service():
     )
     return build('sheets', 'v4', credentials=creds)
 
+def safe_parse_json(raw_text):
+    """Bulletproof JSON parser to handle AI quirks (Markdown, Lists, Double Strings)"""
+    try:
+        if raw_text.startswith("```json"):
+            raw_text = raw_text[7:-3].strip()
+        elif raw_text.startswith("```"):
+            raw_text = raw_text[3:-3].strip()
+
+        data = json.loads(raw_text)
+        
+        if isinstance(data, str):
+            data = json.loads(data)
+            
+        if isinstance(data, list):
+            if len(data) > 0 and isinstance(data[0], dict):
+                data = data[0]
+            else:
+                return None
+                
+        if isinstance(data, dict):
+            return data
+            
+        return None
+    except Exception as e:
+        return None
+        
+
 def get_existing_urls(service):
     """Reads Column F (Source URL) to check for duplicates."""
     try:
         # UPDATED: Read from F2 to the end (F2:F) to skip the Header row
         result = service.spreadsheets().values().get(
-            spreadsheetId=SPREADSHEET_ID, range="Sheet1!F2:F"
+            spreadsheetId=SPREADSHEET_ID, range="'Scraped Database'!F2:F"
         ).execute()
         
         rows = result.get('values', [])
@@ -147,19 +174,24 @@ def extract_info_with_ai(text_content, url):
     for attempt in range(max_retries):
         try:
             response = model.generate_content(prompt)
-            data = json.loads(response.text)
+            data = safe_parse_json(response.text)
             
-            # --- SAFETY CHECK: Handle List vs Dict ---
-            if isinstance(data, list):
-                if len(data) > 0 and isinstance(data[0], dict):
-                    return data[0] # Take first item if it's a list
-                else:
-                    return None # Discard empty lists or lists of strings
-            
-            if not isinstance(data, dict):
-                return None # Discard plain strings
+            if data:
+                return data
                 
-            return data
+            # data = json.loads(response.text)
+            
+            # # --- SAFETY CHECK: Handle List vs Dict ---
+            # if isinstance(data, list):
+            #     if len(data) > 0 and isinstance(data[0], dict):
+            #         return data[0] # Take first item if it's a list
+            #     else:
+            #         return None # Discard empty lists or lists of strings
+            
+            # if not isinstance(data, dict):
+            #     return None # Discard plain strings
+                
+            # return data
             
         except Exception as e:
             if "429" in str(e):
