@@ -257,7 +257,7 @@ def save_to_sheet(service, rows):
     body = {'values': rows}
     service.spreadsheets().values().append(
         spreadsheetId=SPREADSHEET_ID,
-        range="Sheet1!A1",
+        range="'Scraped Database'!A1",
         valueInputOption="USER_ENTERED",
         body=body
     ).execute()
