@@ -15,6 +15,8 @@ from googleapiclient.discovery import build
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
+GEMINI_MODEL="gemini-2.5-flash"
+# GEMINI_MODEL="gemini-3-flash-preview"
 
 RSS_FEEDS = [
     "https://www.google.co.in/alerts/feeds/15296787733172383910/8375788598715294266",
@@ -177,7 +179,7 @@ def extract_info_with_ai(text_content, url):
         try:
             # response = model.generate_content/prompt)
             response = client.models.generate_content(
-                model="gemini-3-flash-preview",
+                model=GEMINI_MODEL,
                 contents=prompt,
             )
             data = safe_parse_json(response.text)
