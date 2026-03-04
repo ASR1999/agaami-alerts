@@ -202,7 +202,7 @@ def extract_info_with_ai(text_content, url):
             # return data
             
         except Exception as e:
-            if "429" in str(e):
+            if "429" in str(e) or "503" in str(e):
                 print(f"  !! Rate limit. Waiting 65s... ({attempt+1}/{max_retries})")
                 time.sleep(65)
             else:
@@ -263,12 +263,31 @@ def scrape_and_process(url):
 
 def save_to_sheet(service, rows):
     body = {'values': rows}
-    service.spreadsheets().values().append(
-        spreadsheetId=SPREADSHEET_ID,
-        range="'Scraped Database'!A1",
-        valueInputOption="USER_ENTERED",
-        body=body
-    ).execute()
+    # service.spreadsheets().values().append(
+    #     spreadsheetId=SPREADSHEET_ID,
+    #     range="'Scraped Database'!A1",
+    #     valueInputOption="USER_ENTERED",
+    #     body=body
+    # ).execute()
+
+    # FIX 2: Add a retry loop for Google Sheets network drops
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            service.spreadsheets().values().append(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"'Scraped Database'!A1",
+                valueInputOption="USER_ENTERED",
+                body=body
+            ).execute()
+            print("Successfully saved data to Google Sheets.")
+            return # Exit function on success
+        except Exception as e:
+            print(f"  !! Network error saving to sheets: {e}. Retrying ({attempt+1}/{max_retries})...")
+            time.sleep(10) # Wait 10 seconds before trying to save again
+            
+    print("FATAL: Could not save to sheets after multiple attempts.")
+
 
 if __name__ == "__main__":
     all_new_rows = []
