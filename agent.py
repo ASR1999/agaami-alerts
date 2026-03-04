@@ -7,7 +7,7 @@ import feedparser
 import re
 from urllib.parse import urlparse, parse_qs
 from bs4 import BeautifulSoup
-import google.generativeai as genai
+import google as genai
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
@@ -38,8 +38,10 @@ RSS_FEEDS = [
     "https://www.google.co.in/alerts/feeds/15296787733172383910/2743587427347208696"
 ]
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-3-flash-preview', generation_config={"response_mime_type": "application/json"})
+# genai.configure(api_key=GEMINI_API_KEY)
+# model = genai.GenerativeModel('gemini-3-flash-preview', generation_config={"response_mime_type": "application/json"})
+
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 def get_google_sheets_service():
     """Authenticates and returns the Sheets service."""
@@ -173,7 +175,11 @@ def extract_info_with_ai(text_content, url):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            response = model.generate_content(prompt)
+            # response = model.generate_content/prompt)
+            response = client.models.generate_content(
+                model="gemini-3-flash-preview",
+                contents=prompt,
+            )
             data = safe_parse_json(response.text)
             
             if data:
